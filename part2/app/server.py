@@ -13,7 +13,9 @@ port is reachable. serve() must use the host it is given.
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from functools import partial
 from pathlib import Path
+from time import perf_counter
 
 from app.queue import join, take
 
@@ -25,20 +27,41 @@ class QueueServer(ThreadingHTTPServer):
 def serve(host: str, port: int, data_dir: str) -> None:
     """Listen until the process is stopped. Use join and take from app.queue."""
     path = Path(data_dir) / "queue.txt"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    metrics = None
+    if os.environ.get("QUEUE_BACKEND") == "redis":
+        from app.redis_queue import RedisQueue
+
+        backend = RedisQueue(os.environ.get("REDIS_URL", "redis://db:6379/0"))
+        add_name, remove_name = backend.join, backend.take
+        metrics = backend.metrics
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        add_name, remove_name = partial(join, path), partial(take, path)
 
     class Handler(BaseHTTPRequestHandler):
+        def handle_one_request(self) -> None:
+            self.started = perf_counter()
+            super().handle_one_request()
+
         def reply(self, status: int, text: str) -> None:
-            payload = text.encode("utf-8")
+            self.send_body(status, text.encode("utf-8"), "text/plain; charset=utf-8")
+
+        def send_body(self, status: int, payload: bytes, content_type: str) -> None:
             self.send_response(status)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
+            try:
+                self.end_headers()
+                self.wfile.write(payload)
+            finally:
+                if metrics is not None:
+                    metrics.record_http(self.command, self.path, status, perf_counter() - self.started)
 
         def do_GET(self) -> None:
             if self.path == "/health":
                 self.reply(200, "ok")
+            elif self.path == "/metrics" and metrics is not None:
+                self.send_body(200, metrics.render(), metrics.content_type)
             else:
                 self.reply(404, "not found")
 
@@ -48,17 +71,23 @@ def serve(host: str, port: int, data_dir: str) -> None:
                 if not 0 < length <= 65536:
                     raise ValueError("invalid body length")
                 data = json.loads(self.rfile.read(length))
-                ticket = join(path, data["name"])
+                ticket = add_name(data["name"])
             except (KeyError, TypeError, ValueError):
                 self.reply(400, "invalid name")
+                return
+            except OSError:
+                self.reply(503, "queue unavailable")
                 return
             self.reply(200, str(ticket))
 
         def next_name(self) -> None:
             try:
-                name = take(path)
+                name = remove_name()
             except LookupError:
                 self.reply(404, "empty")
+                return
+            except OSError:
+                self.reply(503, "queue unavailable")
                 return
             self.reply(200, name)
 
