@@ -81,7 +81,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish the image tested in this run
+      - name: Publish the image from the build job
         id: publish
         run: |
           docker load -i lab-queue.tar.gz

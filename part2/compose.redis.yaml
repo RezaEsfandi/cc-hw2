@@ -24,6 +24,7 @@ services:
     image: quay.io/oliver006/redis_exporter:v1.76.0
     environment:
       REDIS_ADDR: ${REDIS_URL:-redis://db:6379/0}
+      REDIS_EXPORTER_CONNECTION_TIMEOUT: 1s
     depends_on:
       db:
         condition: service_healthy
