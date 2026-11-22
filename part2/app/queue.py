@@ -6,8 +6,11 @@ with a temporary directory, and do not start Docker.
 
 from __future__ import annotations
 
+import fcntl
+import os
+from contextlib import contextmanager
 from pathlib import Path
-from time import sleep
+from tempfile import NamedTemporaryFile
 
 
 def clean_name(name: str) -> str:
@@ -27,6 +30,14 @@ def read_names(path: Path) -> list[str]:
         return []
 
 
+@contextmanager
+def queue_lock(path: Path):
+    # Lock a stable file. queue.txt can be replaced while this lock is held.
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def join(path: str | Path, name: str) -> int:
     """Append one person and return the ticket number.
 
@@ -38,12 +49,11 @@ def join(path: str | Path, name: str) -> int:
     """
     name = clean_name(name)
     path = Path(path)
-    ticket = len(read_names(path)) + 1
-    # Make the overlap easier to see in the before-lock experiment.
-    sleep(0.02)
-    with path.open("a", encoding="utf-8") as queue:
-        queue.write(name + "\n")
-    return ticket
+    with queue_lock(path):
+        ticket = len(read_names(path)) + 1
+        with path.open("a", encoding="utf-8") as queue:
+            queue.write(name + "\n")
+        return ticket
 
 
 def take(path: str | Path) -> str:
@@ -52,8 +62,16 @@ def take(path: str | Path) -> str:
     Raise LookupError when the file is missing or has no names.
     """
     path = Path(path)
-    names = read_names(path)
-    if not names:
-        raise LookupError("empty queue")
-    path.write_text("".join(name + "\n" for name in names[1:]), encoding="utf-8")
-    return names[0]
+    with queue_lock(path):
+        names = read_names(path)
+        if not names:
+            raise LookupError("empty queue")
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+            temporary_path = Path(tmp.name)
+            try:
+                tmp.writelines(name + "\n" for name in names[1:])
+                tmp.close()
+                os.replace(temporary_path, path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+        return names[0]
