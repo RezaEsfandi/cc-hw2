@@ -1,0 +1,40 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.redis
+    volumes: !reset []
+    environment:
+      QUEUE_BACKEND: redis
+      REDIS_URL: ${REDIS_URL:-redis://db:6379/0}
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+  db-exporter:
+    image: quay.io/oliver006/redis_exporter:v1.76.0
+    environment:
+      REDIS_ADDR: ${REDIS_URL:-redis://db:6379/0}
+    depends_on:
+      db:
+        condition: service_healthy
+  prometheus:
+    image: quay.io/prometheus/prometheus:v3.5.0
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9192}:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+volumes:
+  redis-data:
+  prometheus-data:
