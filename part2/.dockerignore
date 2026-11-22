@@ -1,0 +1,8 @@
+.git
+.env
+tests/
+site/
+postman/
+tools/
+**/__pycache__/
+.pytest_cache/

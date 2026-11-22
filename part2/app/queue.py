@@ -7,6 +7,24 @@ with a temporary directory, and do not start Docker.
 from __future__ import annotations
 
 from pathlib import Path
+from time import sleep
+
+
+def clean_name(name: str) -> str:
+    if not isinstance(name, str):
+        raise ValueError("invalid name")
+    cleaned = name.strip()
+    if not cleaned or len(cleaned) > 40 or name.splitlines() != [name]:
+        raise ValueError("invalid name")
+    cleaned.encode("utf-8")
+    return cleaned
+
+
+def read_names(path: Path) -> list[str]:
+    try:
+        return path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
 
 
 def join(path: str | Path, name: str) -> int:
@@ -18,7 +36,14 @@ def join(path: str | Path, name: str) -> int:
     stripped name is empty, longer than 40 characters, or the original
     name contains a newline.
     """
-    raise NotImplementedError("TODO: append a line and return the ticket number")
+    name = clean_name(name)
+    path = Path(path)
+    ticket = len(read_names(path)) + 1
+    # Make the overlap easier to see in the before-lock experiment.
+    sleep(0.02)
+    with path.open("a", encoding="utf-8") as queue:
+        queue.write(name + "\n")
+    return ticket
 
 
 def take(path: str | Path) -> str:
@@ -26,4 +51,9 @@ def take(path: str | Path) -> str:
 
     Raise LookupError when the file is missing or has no names.
     """
-    raise NotImplementedError("TODO: remove the first line and return that name")
+    path = Path(path)
+    names = read_names(path)
+    if not names:
+        raise LookupError("empty queue")
+    path.write_text("".join(name + "\n" for name in names[1:]), encoding="utf-8")
+    return names[0]
