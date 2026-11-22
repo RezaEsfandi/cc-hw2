@@ -1,0 +1,48 @@
+name: Deploy a tagged Pages version
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to deploy
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  pages:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - name: Render tagged version
+        env:
+          VERSION: ${{ inputs.tag }}
+        run: |
+          python - <<'PY'
+          import html
+          import os
+          from pathlib import Path
+
+          page = Path("part2/site/index.html")
+          source = page.read_text(encoding="utf-8")
+          if source.count("__VERSION__") != 1:
+              raise SystemExit("Expected one version placeholder in the tagged page")
+          page.write_text(source.replace("__VERSION__", html.escape(os.environ["VERSION"])), encoding="utf-8")
+          PY
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: part2/site
+      - uses: actions/deploy-pages@v4
+        id: deployment
